@@ -3,7 +3,7 @@ import { GameScene } from './scenes/GameScene';
 import { GameOverScene } from './scenes/GameOverScene';
 
 const config: Phaser.Types.Core.GameConfig = {
-  type: Phaser.AUTO,
+  type: Phaser.WEBGL, // PostFX pipelines require WebGL
   width: 1280,
   height: 720,
   backgroundColor: '#1a1a2e',

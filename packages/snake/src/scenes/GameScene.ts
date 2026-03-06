@@ -128,11 +128,9 @@ export class GameScene extends Phaser.Scene {
       case 'RIGHT': next.x += 1; break;
     }
 
-    // Wall collision
-    if (next.x < 0 || next.x >= COLS || next.y < 0 || next.y >= PLAY_ROWS) {
-      this.gameOver();
-      return;
-    }
+    // Wrap around walls
+    next.x = (next.x + COLS) % COLS;
+    next.y = (next.y + PLAY_ROWS) % PLAY_ROWS;
 
     // Self collision
     if (this.snake.some(s => s.x === next.x && s.y === next.y)) {

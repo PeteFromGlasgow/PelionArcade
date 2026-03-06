@@ -5,6 +5,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm --filter snake dev",
+    "dev:scoring": "pnpm --filter scoring-service dev",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck"
   },

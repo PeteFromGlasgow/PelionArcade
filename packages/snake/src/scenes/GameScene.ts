@@ -34,6 +34,8 @@ export class GameScene extends Phaser.Scene {
   private tickCount = 0;
 
   private snakeSprites: Phaser.GameObjects.Image[] = [];
+  private prevRotations: number[] = [];
+  private currRotations: number[] = [];
   private foodSprite!: Phaser.GameObjects.Image;
   private fxPipeline: SnakeFXPipeline | null = null;
   private scoreText!: Phaser.GameObjects.Text;
@@ -59,6 +61,8 @@ export class GameScene extends Phaser.Scene {
   create() {
     // Reset sprite references (Phaser destroys game objects on scene restart)
     this.snakeSprites = [];
+    this.prevRotations = [];
+    this.currRotations = [];
 
     this.generateTextures();
 
@@ -85,6 +89,7 @@ export class GameScene extends Phaser.Scene {
     this.foodSprite = this.add.image(0, 0, 'food').setOrigin(0.5, 0.5).setDepth(1);
     this.drawFood();
     this.drawSnake();
+    this.prevRotations = [...this.currRotations];
 
     // UI bar on top
     this.add.rectangle(0, 0, 1280, PLAY_Y_OFFSET, 0x16213e).setOrigin(0, 0).setDepth(10);
@@ -157,6 +162,7 @@ export class GameScene extends Phaser.Scene {
 
   private tick() {
     this.prevSnake = this.snake.map(p => ({ ...p }));
+    this.prevRotations = [...this.currRotations];
     this.tickCount++;
     this.direction = this.nextDirection;
 
@@ -267,61 +273,28 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // Returns the texture key and rotation for a body segment at index i.
-  // The base bend texture (rotation=0) connects the RIGHT and DOWN sides.
-  // The base straight texture (rotation=0) is horizontal.
-  private getBodySpriteInfo(i: number): { texture: string; rotation: number } {
+  // Returns the rotation for a body segment (dave frame 2) at index i.
+  // Uses the toPrev (toward-head) direction, which handles both straight and bend segments.
+  private getBodyRotation(i: number): number {
     const seg  = this.snake[i];
     const prev = this.snake[i - 1]; // toward head
-    const next = this.snake[i + 1]; // toward tail
-
-    // fromNext: direction of travel arriving at seg from the tail side
-    // toPrev:   direction of travel leaving seg toward the head side
-    const fromNext = this.dirBetween(next, seg);
-    const toPrev   = this.dirBetween(seg, prev);
-
-    if (fromNext === toPrev) {
-      // Straight segment
-      const isHorizontal = fromNext === 'LEFT' || fromNext === 'RIGHT';
-      return { texture: 'snake-body', rotation: isHorizontal ? 0 : Math.PI / 2 };
-    }
-
-    // Bend segment
-    // Map (fromNext, toPrev) to the rotation needed so the base RIGHT+DOWN
-    // bend opens toward the correct pair of sides.
-    //
-    // Logic: the open sides of the cell are:
-    //   entryFromSide = opposite(fromNext)   [where the tail-side body enters]
-    //   exitToSide    = toPrev               [where the head-side body exits]
-    //
-    // Base texture opens RIGHT+DOWN.
-    // Rotating 90° CW: RIGHT→DOWN, DOWN→LEFT → opens DOWN+LEFT.
-    // Rotating 180°:                           opens LEFT+UP.
-    // Rotating 270° CW (-90°):                 opens UP+RIGHT.
-    const bendMap: Record<string, number> = {
-      'UP+RIGHT':   0,          // entry from top,   exit right  → open DOWN+RIGHT → 0
-      'LEFT+DOWN':  0,          // entry from left,  exit down   → open RIGHT+DOWN → 0
-      'UP+LEFT':    Math.PI / 2,
-      'RIGHT+DOWN': Math.PI / 2,
-      'DOWN+LEFT':  Math.PI,
-      'RIGHT+UP':   Math.PI,
-      'DOWN+RIGHT': -Math.PI / 2,
-      'LEFT+UP':    -Math.PI / 2,
-    };
-
-    const key = `${fromNext}+${toPrev}`;
-    return { texture: 'snake-bend', rotation: bendMap[key] ?? 0 };
+    const toPrev = this.dirBetween(seg, prev);
+    return this.dirToRotation(toPrev) - Math.PI / 2;
   }
 
   private drawSnake() {
-    // Grow or shrink the sprite pool to match snake length
+    // Grow or shrink the sprite pool and rotation arrays to match snake length
     while (this.snakeSprites.length < this.snake.length) {
       this.snakeSprites.push(
         this.add.image(0, 0, 'snake-body').setOrigin(0.5, 0.5).setDepth(2),
       );
+      this.currRotations.push(0);
+      this.prevRotations.push(0);
     }
     while (this.snakeSprites.length > this.snake.length) {
       this.snakeSprites.pop()!.destroy();
+      this.currRotations.pop();
+      this.prevRotations.pop();
     }
 
     for (let i = 0; i < this.snake.length; i++) {
@@ -331,24 +304,19 @@ export class GameScene extends Phaser.Scene {
         // Head – frame 0 = closed mouth, frame 1 = open mouth, alternates every tick
         const frame = this.tickCount % 2;
         sprite.setTexture('dave', frame).setDisplaySize(S * 2, S * 2);
-        sprite.setRotation(0);
+        sprite.setDepth(3); // Head renders on top of body
+        this.currRotations[i] = 0;
       } else if (i === this.snake.length - 1) {
         // Tail – sprite base is pointing DOWN, so offset rotation by -Math.PI/2
         const tailDir = this.dirBetween(this.snake[i - 1], this.snake[i]);
         sprite.setTexture('dave', 3).setDisplaySize(S, S);
-        sprite.setRotation(this.dirToRotation(tailDir) - Math.PI / 2);
+        sprite.setDepth(2);
+        this.currRotations[i] = this.dirToRotation(tailDir) - Math.PI / 2;
       } else {
-        // Body
-        const { texture, rotation } = this.getBodySpriteInfo(i);
-        if (texture === 'snake-body') {
-          // Sprite base is vertical, offset rotation by -Math.PI/2
-          sprite.setTexture('dave', 2).setDisplaySize(S * 2, S * 2);
-          sprite.setRotation(rotation - Math.PI / 2);
-        } else {
-          // Bend – still uses programmatic texture with its own rotation convention
-          sprite.setTexture(texture).setDisplaySize(S * 2, S * 2);
-          sprite.setRotation(rotation);
-        }
+        // Body (straight and bend) – always use dave frame 2, rotated toward head
+        sprite.setTexture('dave', 2).setDisplaySize(S, S);
+        sprite.setDepth(2);
+        this.currRotations[i] = this.getBodyRotation(i);
       }
     }
   }
@@ -368,12 +336,23 @@ export class GameScene extends Phaser.Scene {
     };
   }
 
+  private lerpAngle(a: number, b: number, t: number): number {
+    let diff = b - a;
+    if (diff > Math.PI)       diff -= 2 * Math.PI;
+    else if (diff < -Math.PI) diff += 2 * Math.PI;
+    return a + diff * t;
+  }
+
   private renderSnakePositions(t: number) {
     for (let i = 0; i < this.snakeSprites.length; i++) {
       const curr = this.snake[i];
       const prev = this.prevSnake[i] ?? curr;
       const { px, py } = this.lerpPixel(prev, curr, t);
       this.snakeSprites[i].setPosition(px, py);
+
+      const currRot = this.currRotations[i] ?? 0;
+      const prevRot = this.prevRotations[i] ?? currRot;
+      this.snakeSprites[i].setRotation(this.lerpAngle(prevRot, currRot, t));
     }
   }
 

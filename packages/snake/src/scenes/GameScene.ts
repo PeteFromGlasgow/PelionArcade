@@ -11,26 +11,26 @@ import {
   SPEED_INCREASE_PER_FOOD,
 } from '../constants';
 import { SnakeFXPipeline, SNAKE_FX_PIPELINE_KEY } from '../shaders/SnakeFXPipeline';
-
-type Direction = 'UP' | 'DOWN' | 'LEFT' | 'RIGHT';
-
-interface Point {
-  x: number;
-  y: number;
-}
+import { FoodManager, type FoodTypeDefinition } from '../game/FoodManager';
+import { Snake, type Direction, type Point } from '../game/Snake';
 
 const S = GRID_SIZE;
 
+const FOOD_TYPES: readonly FoodTypeDefinition[] = [
+  {
+    id: 'apple',
+    textureKey: 'food',
+    score: 10,
+    speedDelta: SPEED_INCREASE_PER_FOOD,
+  },
+];
+
 export class GameScene extends Phaser.Scene {
-  private snake: Point[] = [];
-  private prevSnake: Point[] = [];
-  private direction: Direction = 'RIGHT';
-  private nextDirection: Direction = 'RIGHT';
-  private food: Point = { x: 0, y: 0 };
+  private snake = new Snake(COLS, PLAY_ROWS);
+  private foodManager = new FoodManager(COLS, PLAY_ROWS, FOOD_TYPES);
   private score = 0;
   private tickMs = TICK_MS_START;
   private elapsed = 0;
-
   private tickCount = 0;
 
   private snakeSprites: Phaser.GameObjects.Image[] = [];
@@ -59,7 +59,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   create() {
-    // Reset sprite references (Phaser destroys game objects on scene restart)
     this.snakeSprites = [];
     this.prevRotations = [];
     this.currRotations = [];
@@ -70,28 +69,19 @@ export class GameScene extends Phaser.Scene {
     this.tickMs = TICK_MS_START;
     this.elapsed = 0;
     this.tickCount = 0;
-    this.direction = 'RIGHT';
-    this.nextDirection = 'RIGHT';
 
     const startX = Math.floor(COLS / 2);
     const startY = Math.floor(PLAY_ROWS / 2);
-    this.snake = [
-      { x: startX,     y: startY },
-      { x: startX - 1, y: startY },
-      { x: startX - 2, y: startY },
-    ];
-    this.prevSnake = this.snake.map(p => ({ ...p }));
+    this.snake.reset(startX, startY);
+    this.foodManager.reset(this.snake.getSegments());
 
-    this.spawnFood();
     this.drawGrid();
 
-    // Food rendered below snake
     this.foodSprite = this.add.image(0, 0, 'food').setOrigin(0.5, 0.5).setDepth(1);
     this.drawFood();
     this.drawSnake();
     this.prevRotations = [...this.currRotations];
 
-    // UI bar on top
     this.add.rectangle(0, 0, 1280, PLAY_Y_OFFSET, 0x16213e).setOrigin(0, 0).setDepth(10);
     this.scoreText = this.add
       .text(16, PLAY_Y_OFFSET / 2, 'SCORE: 0', {
@@ -111,10 +101,6 @@ export class GameScene extends Phaser.Scene {
       .setOrigin(1, 0.5)
       .setDepth(11);
 
-    // Register the PostFX class with Phaser's pipeline manager (safe to call
-    // every time; addPostPipeline skips duplicates internally).
-    // getPostPipeline() always looks up by name in this registry, so the
-    // class must be registered before setPostPipeline is called.
     const pipelineManager = (
       this.game.renderer as Phaser.Renderer.WebGL.WebGLRenderer
     ).pipelines as unknown as {
@@ -129,9 +115,9 @@ export class GameScene extends Phaser.Scene {
 
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.wasd = {
-      up:    this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
-      down:  this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S),
-      left:  this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A),
+      up: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
+      down: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S),
+      left: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A),
       right: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D),
     };
   }
@@ -149,77 +135,58 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleInput() {
-    const up    = this.cursors.up.isDown    || this.wasd.up.isDown;
-    const down  = this.cursors.down.isDown  || this.wasd.down.isDown;
-    const left  = this.cursors.left.isDown  || this.wasd.left.isDown;
+    const up = this.cursors.up.isDown || this.wasd.up.isDown;
+    const down = this.cursors.down.isDown || this.wasd.down.isDown;
+    const left = this.cursors.left.isDown || this.wasd.left.isDown;
     const right = this.cursors.right.isDown || this.wasd.right.isDown;
+    const currentDirection = this.snake.getDirection();
 
-    if      (up    && this.direction !== 'DOWN')  this.nextDirection = 'UP';
-    else if (down  && this.direction !== 'UP')    this.nextDirection = 'DOWN';
-    else if (left  && this.direction !== 'RIGHT') this.nextDirection = 'LEFT';
-    else if (right && this.direction !== 'LEFT')  this.nextDirection = 'RIGHT';
+    if (up && currentDirection !== 'DOWN') this.snake.queueDirection('UP');
+    else if (down && currentDirection !== 'UP') this.snake.queueDirection('DOWN');
+    else if (left && currentDirection !== 'RIGHT') this.snake.queueDirection('LEFT');
+    else if (right && currentDirection !== 'LEFT') this.snake.queueDirection('RIGHT');
   }
 
   private tick() {
-    this.prevSnake = this.snake.map(p => ({ ...p }));
     this.prevRotations = [...this.currRotations];
     this.tickCount++;
-    this.direction = this.nextDirection;
 
-    // Update motion-blur velocity (one grid cell in UV space, scaled to blur spread).
+    const activeFood = this.foodManager.getActiveFood();
+    const moveResult = this.snake.move(activeFood?.position);
+
     if (this.fxPipeline) {
       const stepX = (GRID_SIZE / 1280) * 0.4;
-      const stepY = (GRID_SIZE / 720)  * 0.4;
-      switch (this.direction) {
-        case 'RIGHT': this.fxPipeline.setVelocity( stepX,  0);     break;
-        case 'LEFT':  this.fxPipeline.setVelocity(-stepX,  0);     break;
-        case 'DOWN':  this.fxPipeline.setVelocity( 0,      stepY); break;
-        case 'UP':    this.fxPipeline.setVelocity( 0,     -stepY); break;
+      const stepY = (GRID_SIZE / 720) * 0.4;
+      switch (moveResult.direction) {
+        case 'RIGHT':
+          this.fxPipeline.setVelocity(stepX, 0);
+          break;
+        case 'LEFT':
+          this.fxPipeline.setVelocity(-stepX, 0);
+          break;
+        case 'DOWN':
+          this.fxPipeline.setVelocity(0, stepY);
+          break;
+        case 'UP':
+          this.fxPipeline.setVelocity(0, -stepY);
+          break;
       }
     }
 
-    const head = this.snake[0];
-    const next: Point = { x: head.x, y: head.y };
-
-    switch (this.direction) {
-      case 'UP':    next.y -= 1; break;
-      case 'DOWN':  next.y += 1; break;
-      case 'LEFT':  next.x -= 1; break;
-      case 'RIGHT': next.x += 1; break;
-    }
-
-    next.x = (next.x + COLS)      % COLS;
-    next.y = (next.y + PLAY_ROWS) % PLAY_ROWS;
-
-    if (this.snake.some(s => s.x === next.x && s.y === next.y)) {
+    if (moveResult.collidedSelf) {
       this.gameOver();
       return;
     }
 
-    this.snake.unshift(next);
-
-    if (next.x === this.food.x && next.y === this.food.y) {
-      this.score += 10;
+    if (moveResult.ateFood && activeFood) {
+      this.score += activeFood.score;
       this.scoreText.setText(`SCORE: ${this.score}`);
-      this.tickMs = Math.max(TICK_MS_MIN, this.tickMs - SPEED_INCREASE_PER_FOOD);
-      this.spawnFood();
-    } else {
-      this.snake.pop();
+      this.tickMs = Math.max(TICK_MS_MIN, this.tickMs - activeFood.speedDelta);
+      this.foodManager.spawn(this.snake.getSegments());
     }
 
     this.drawSnake();
     this.drawFood();
-  }
-
-  private spawnFood() {
-    let pos: Point;
-    do {
-      pos = {
-        x: Phaser.Math.Between(0, COLS - 1),
-        y: Phaser.Math.Between(0, PLAY_ROWS - 1),
-      };
-    } while (this.snake.some(s => s.x === pos.x && s.y === pos.y));
-    this.food = pos;
   }
 
   private drawGrid() {
@@ -230,13 +197,12 @@ export class GameScene extends Phaser.Scene {
       grid.lineTo(x * GRID_SIZE, ROWS * GRID_SIZE);
     }
     for (let y = 0; y <= PLAY_ROWS; y++) {
-      grid.moveTo(0,                PLAY_Y_OFFSET + y * GRID_SIZE);
+      grid.moveTo(0, PLAY_Y_OFFSET + y * GRID_SIZE);
       grid.lineTo(COLS * GRID_SIZE, PLAY_Y_OFFSET + y * GRID_SIZE);
     }
     grid.strokePath();
   }
 
-  // Returns the pixel center of a grid cell
   private cellCenter(p: Point): { px: number; py: number } {
     return {
       px: p.x * GRID_SIZE + GRID_SIZE / 2,
@@ -244,91 +210,84 @@ export class GameScene extends Phaser.Scene {
     };
   }
 
-  // Returns the rotation angle (radians) for a given direction,
-  // where 0 = pointing RIGHT (base orientation of all sprites).
   private dirToRotation(dir: Direction): number {
     switch (dir) {
-      case 'RIGHT': return 0;
-      case 'DOWN':  return Math.PI / 2;
-      case 'LEFT':  return Math.PI;
-      case 'UP':    return -Math.PI / 2;
+      case 'RIGHT':
+        return 0;
+      case 'DOWN':
+        return Math.PI / 2;
+      case 'LEFT':
+        return Math.PI;
+      case 'UP':
+        return -Math.PI / 2;
     }
   }
 
-  // Returns the direction of travel from `from` to `to`, accounting for
-  // grid wrap-around.
   private dirBetween(from: Point, to: Point): Direction {
     let dx = to.x - from.x;
     let dy = to.y - from.y;
 
-    if      (dx >  COLS      / 2) dx -= COLS;
-    else if (dx < -COLS      / 2) dx += COLS;
-    if      (dy >  PLAY_ROWS / 2) dy -= PLAY_ROWS;
+    if (dx > COLS / 2) dx -= COLS;
+    else if (dx < -COLS / 2) dx += COLS;
+    if (dy > PLAY_ROWS / 2) dy -= PLAY_ROWS;
     else if (dy < -PLAY_ROWS / 2) dy += PLAY_ROWS;
 
     if (Math.abs(dx) >= Math.abs(dy)) {
       return dx >= 0 ? 'RIGHT' : 'LEFT';
-    } else {
-      return dy >= 0 ? 'DOWN' : 'UP';
     }
+    return dy >= 0 ? 'DOWN' : 'UP';
   }
 
-  // Returns the rotation for a body segment (dave frame 2) at index i.
-  // Uses the toPrev (toward-head) direction, which handles both straight and bend segments.
-  private getBodyRotation(i: number): number {
-    const seg  = this.snake[i];
-    const prev = this.snake[i - 1]; // toward head
+  private getBodyRotation(i: number, segments: readonly Point[]): number {
+    const seg = segments[i];
+    const prev = segments[i - 1];
     const toPrev = this.dirBetween(seg, prev);
     return this.dirToRotation(toPrev) - Math.PI / 2;
   }
 
   private drawSnake() {
-    // Grow or shrink the sprite pool and rotation arrays to match snake length
-    while (this.snakeSprites.length < this.snake.length) {
+    const segments = this.snake.getSegments();
+
+    while (this.snakeSprites.length < segments.length) {
       this.snakeSprites.push(
         this.add.image(0, 0, 'snake-body').setOrigin(0.5, 0.5).setDepth(2),
       );
       this.currRotations.push(0);
       this.prevRotations.push(0);
     }
-    while (this.snakeSprites.length > this.snake.length) {
+    while (this.snakeSprites.length > segments.length) {
       this.snakeSprites.pop()!.destroy();
       this.currRotations.pop();
       this.prevRotations.pop();
     }
 
-    for (let i = 0; i < this.snake.length; i++) {
+    for (let i = 0; i < segments.length; i++) {
       const sprite = this.snakeSprites[i];
 
       if (i === 0) {
-        // Head – frame 0 = closed mouth, frame 1 = open mouth, alternates every tick
         const frame = this.tickCount % 2;
         sprite.setTexture('dave', frame).setDisplaySize(S * 2, S * 2);
-        sprite.setDepth(3); // Head renders on top of body
+        sprite.setDepth(3);
         this.currRotations[i] = 0;
-      } else if (i === this.snake.length - 1) {
-        // Tail – sprite base is pointing DOWN, so offset rotation by -Math.PI/2
-        const tailDir = this.dirBetween(this.snake[i - 1], this.snake[i]);
+      } else if (i === segments.length - 1) {
+        const tailDir = this.dirBetween(segments[i - 1], segments[i]);
         sprite.setTexture('dave', 3).setDisplaySize(S, S);
         sprite.setDepth(2);
         this.currRotations[i] = this.dirToRotation(tailDir) - Math.PI / 2;
       } else {
-        // Body (straight and bend) – always use dave frame 2, rotated toward head
         sprite.setTexture('dave', 2).setDisplaySize(S, S);
         sprite.setDepth(2);
-        this.currRotations[i] = this.getBodyRotation(i);
+        this.currRotations[i] = this.getBodyRotation(i, segments);
       }
     }
   }
 
-  // Interpolates pixel position between two grid points, handling wrap-around
-  // so the snake slides through the wall edge rather than snapping across it.
   private lerpPixel(prev: Point, curr: Point, t: number): { px: number; py: number } {
     let dx = curr.x - prev.x;
     let dy = curr.y - prev.y;
-    if (dx >  COLS      / 2) dx -= COLS;
+    if (dx > COLS / 2) dx -= COLS;
     else if (dx < -COLS / 2) dx += COLS;
-    if (dy >  PLAY_ROWS / 2) dy -= PLAY_ROWS;
+    if (dy > PLAY_ROWS / 2) dy -= PLAY_ROWS;
     else if (dy < -PLAY_ROWS / 2) dy += PLAY_ROWS;
     return {
       px: (prev.x + dx * t) * S + S / 2,
@@ -338,15 +297,18 @@ export class GameScene extends Phaser.Scene {
 
   private lerpAngle(a: number, b: number, t: number): number {
     let diff = b - a;
-    if (diff > Math.PI)       diff -= 2 * Math.PI;
+    if (diff > Math.PI) diff -= 2 * Math.PI;
     else if (diff < -Math.PI) diff += 2 * Math.PI;
     return a + diff * t;
   }
 
   private renderSnakePositions(t: number) {
+    const segments = this.snake.getSegments();
+    const previousSegments = this.snake.getPreviousSegments();
+
     for (let i = 0; i < this.snakeSprites.length; i++) {
-      const curr = this.snake[i];
-      const prev = this.prevSnake[i] ?? curr;
+      const curr = segments[i];
+      const prev = previousSegments[i] ?? curr;
       const { px, py } = this.lerpPixel(prev, curr, t);
       this.snakeSprites[i].setPosition(px, py);
 
@@ -357,67 +319,63 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawFood() {
-    const { px, py } = this.cellCenter(this.food);
-    this.foodSprite.setPosition(px, py);
+    const food = this.foodManager.getActiveFood();
+    if (!food) {
+      this.foodSprite.setVisible(false);
+      return;
+    }
+
+    const { px, py } = this.cellCenter(food.position);
+    this.foodSprite
+      .setVisible(true)
+      .setTexture(food.textureKey)
+      .setPosition(px, py);
   }
 
   private gameOver() {
     this.scene.start('GameOverScene', { score: this.score });
   }
 
-  // Generates all sprite textures programmatically. Skips if already created.
   private generateTextures() {
     if (this.textures.exists('snake-body')) return;
 
     const g = new Phaser.GameObjects.Graphics(this);
 
-    // snake-head is loaded as a spritesheet in preload(); no generation needed here.
-
-    // ── BODY STRAIGHT (base: horizontal, connecting LEFT and RIGHT) ──
     g.clear();
     g.fillStyle(0x38a085, 1);
     g.fillRect(0, 4, S, S - 8);
-    // Scale dots
     g.fillStyle(0x2d8a72, 1);
-    g.fillCircle(S / 4,       S / 2, 4);
+    g.fillCircle(S / 4, S / 2, 4);
     g.fillCircle((3 * S) / 4, S / 2, 4);
     g.generateTexture('snake-body', S, S);
 
-    // ── BODY BEND (base: connects RIGHT side and DOWN/BOTTOM side) ──
-    // Right arm:  x=[S/2, S],   y=[4, S-4]  — runs centre→right at channel height
-    // Down arm:   x=[4, S-4],   y=[S/2, S]  — runs centre→bottom at channel width
     g.clear();
     g.fillStyle(0x38a085, 1);
-    g.fillRect(S / 2,     4,     S / 2,     S - 8); // right arm
-    g.fillRect(4,         S / 2, S - 8,     S / 2); // down arm
-    // Scale dot at corner
+    g.fillRect(S / 2, 4, S / 2, S - 8);
+    g.fillRect(4, S / 2, S - 8, S / 2);
     g.fillStyle(0x2d8a72, 1);
     g.fillCircle((3 * S) / 4, (3 * S) / 4, 4);
     g.generateTexture('snake-bend', S, S);
 
-    // ── TAIL (base: tip points RIGHT, body connects on LEFT) ──
     g.clear();
     g.fillStyle(0x38a085, 1);
-    // Triangle: left edge (body side) is flat, right vertex is the tip
     g.fillTriangle(
-      2,     6,      // top-left
-      2,     S - 6,  // bottom-left
-      S - 4, S / 2,  // tip at right
+      2,
+      6,
+      2,
+      S - 6,
+      S - 4,
+      S / 2,
     );
     g.generateTexture('snake-tail', S, S);
 
-    // ── FOOD (apple) ──
     g.clear();
-    // Apple body
     g.fillStyle(0xff6b6b, 1);
     g.fillCircle(S / 2, S / 2 + 2, S / 2 - 3);
-    // Shine highlight
     g.fillStyle(0xffaaaa, 0.7);
     g.fillCircle(S / 2 - 4, S / 2 - 2, 4);
-    // Stem
     g.fillStyle(0x5c4a1e, 1);
     g.fillRect(S / 2 - 1, 2, 2, 6);
-    // Leaf
     g.fillStyle(0x4ecca3, 1);
     g.fillEllipse(S / 2 + 4, 5, 8, 4);
     g.generateTexture('food', S, S);

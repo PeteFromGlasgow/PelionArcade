@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import daveSheetUrl from '../../assets/dave_sprite_sheet.png';
 import {
   GRID_SIZE,
   COLS,
@@ -22,12 +23,15 @@ const S = GRID_SIZE;
 
 export class GameScene extends Phaser.Scene {
   private snake: Point[] = [];
+  private prevSnake: Point[] = [];
   private direction: Direction = 'RIGHT';
   private nextDirection: Direction = 'RIGHT';
   private food: Point = { x: 0, y: 0 };
   private score = 0;
   private tickMs = TICK_MS_START;
   private elapsed = 0;
+
+  private tickCount = 0;
 
   private snakeSprites: Phaser.GameObjects.Image[] = [];
   private foodSprite!: Phaser.GameObjects.Image;
@@ -45,6 +49,13 @@ export class GameScene extends Phaser.Scene {
     super({ key: 'GameScene' });
   }
 
+  preload() {
+    this.load.spritesheet('dave', daveSheetUrl, {
+      frameWidth: 128,
+      frameHeight: 128,
+    });
+  }
+
   create() {
     // Reset sprite references (Phaser destroys game objects on scene restart)
     this.snakeSprites = [];
@@ -54,6 +65,7 @@ export class GameScene extends Phaser.Scene {
     this.score = 0;
     this.tickMs = TICK_MS_START;
     this.elapsed = 0;
+    this.tickCount = 0;
     this.direction = 'RIGHT';
     this.nextDirection = 'RIGHT';
 
@@ -64,6 +76,7 @@ export class GameScene extends Phaser.Scene {
       { x: startX - 1, y: startY },
       { x: startX - 2, y: startY },
     ];
+    this.prevSnake = this.snake.map(p => ({ ...p }));
 
     this.spawnFood();
     this.drawGrid();
@@ -126,6 +139,8 @@ export class GameScene extends Phaser.Scene {
       this.elapsed -= this.tickMs;
       this.tick();
     }
+
+    this.renderSnakePositions(this.elapsed / this.tickMs);
   }
 
   private handleInput() {
@@ -141,6 +156,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private tick() {
+    this.prevSnake = this.snake.map(p => ({ ...p }));
+    this.tickCount++;
     this.direction = this.nextDirection;
 
     // Update motion-blur velocity (one grid cell in UV space, scaled to blur spread).
@@ -308,25 +325,55 @@ export class GameScene extends Phaser.Scene {
     }
 
     for (let i = 0; i < this.snake.length; i++) {
-      const sprite      = this.snakeSprites[i];
-      const { px, py }  = this.cellCenter(this.snake[i]);
-      sprite.setPosition(px, py);
+      const sprite = this.snakeSprites[i];
 
       if (i === 0) {
-        // Head – faces the current direction of movement
-        sprite.setTexture('snake-head');
-        sprite.setRotation(this.dirToRotation(this.direction));
+        // Head – frame 0 = closed mouth, frame 1 = open mouth, alternates every tick
+        const frame = this.tickCount % 2;
+        sprite.setTexture('dave', frame).setDisplaySize(S * 2, S * 2);
+        sprite.setRotation(0);
       } else if (i === this.snake.length - 1) {
-        // Tail – points away from the second-to-last segment
-        sprite.setTexture('snake-tail');
+        // Tail – sprite base is pointing DOWN, so offset rotation by -Math.PI/2
         const tailDir = this.dirBetween(this.snake[i - 1], this.snake[i]);
-        sprite.setRotation(this.dirToRotation(tailDir));
+        sprite.setTexture('dave', 3).setDisplaySize(S, S);
+        sprite.setRotation(this.dirToRotation(tailDir) - Math.PI / 2);
       } else {
         // Body
         const { texture, rotation } = this.getBodySpriteInfo(i);
-        sprite.setTexture(texture);
-        sprite.setRotation(rotation);
+        if (texture === 'snake-body') {
+          // Sprite base is vertical, offset rotation by -Math.PI/2
+          sprite.setTexture('dave', 2).setDisplaySize(S * 2, S * 2);
+          sprite.setRotation(rotation - Math.PI / 2);
+        } else {
+          // Bend – still uses programmatic texture with its own rotation convention
+          sprite.setTexture(texture).setDisplaySize(S * 2, S * 2);
+          sprite.setRotation(rotation);
+        }
       }
+    }
+  }
+
+  // Interpolates pixel position between two grid points, handling wrap-around
+  // so the snake slides through the wall edge rather than snapping across it.
+  private lerpPixel(prev: Point, curr: Point, t: number): { px: number; py: number } {
+    let dx = curr.x - prev.x;
+    let dy = curr.y - prev.y;
+    if (dx >  COLS      / 2) dx -= COLS;
+    else if (dx < -COLS / 2) dx += COLS;
+    if (dy >  PLAY_ROWS / 2) dy -= PLAY_ROWS;
+    else if (dy < -PLAY_ROWS / 2) dy += PLAY_ROWS;
+    return {
+      px: (prev.x + dx * t) * S + S / 2,
+      py: PLAY_Y_OFFSET + (prev.y + dy * t) * S + S / 2,
+    };
+  }
+
+  private renderSnakePositions(t: number) {
+    for (let i = 0; i < this.snakeSprites.length; i++) {
+      const curr = this.snake[i];
+      const prev = this.prevSnake[i] ?? curr;
+      const { px, py } = this.lerpPixel(prev, curr, t);
+      this.snakeSprites[i].setPosition(px, py);
     }
   }
 
@@ -341,25 +388,11 @@ export class GameScene extends Phaser.Scene {
 
   // Generates all sprite textures programmatically. Skips if already created.
   private generateTextures() {
-    if (this.textures.exists('snake-head')) return;
+    if (this.textures.exists('snake-body')) return;
 
     const g = new Phaser.GameObjects.Graphics(this);
 
-    // ── HEAD (base: facing RIGHT, body connects on LEFT, face on RIGHT) ──
-    g.clear();
-    // Main body
-    g.fillStyle(0x4ecca3, 1);
-    g.fillRoundedRect(2, 2, S - 4, S - 4, 6);
-    // Lighter front face area
-    g.fillStyle(0x5edfb3, 1);
-    g.fillRoundedRect(S / 2, 4, S / 2 - 4, S - 8, 4);
-    // Eye
-    g.fillStyle(0x1a1a2e, 1);
-    g.fillCircle(S - 8, S / 2 - 4, 3);
-    // Tongue
-    g.fillStyle(0xff6b6b, 1);
-    g.fillRect(S - 4, S / 2 - 1, 4, 2);
-    g.generateTexture('snake-head', S, S);
+    // snake-head is loaded as a spritesheet in preload(); no generation needed here.
 
     // ── BODY STRAIGHT (base: horizontal, connecting LEFT and RIGHT) ──
     g.clear();

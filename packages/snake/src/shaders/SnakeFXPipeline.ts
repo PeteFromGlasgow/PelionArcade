@@ -60,7 +60,7 @@ void main() {
     * max(0.0, lum - threshold) / (1.0 - threshold)
     * 2.5;
 
-  gl_FragColor = bloom + texture2D(uMainSampler, uv); // blurred + bloom;
+  gl_FragColor = texture2D(uMainSampler, uv); // blurred + bloom;
 }
 `;
 

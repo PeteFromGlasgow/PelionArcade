@@ -5,11 +5,13 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm --filter snake dev",
+    "dev:arcade": "concurrently --names \"arcade,snake,pakoroids,scoring\" \"pnpm --filter stream-arcade dev\" \"pnpm --filter snake dev\" \"pnpm --filter pakoroids dev\" \"pnpm --filter scoring-service dev\"",
     "dev:scoring": "pnpm --filter scoring-service dev",
     "lint": "pnpm -r lint",
     "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
+    "concurrently": "^9.2.1",
     "typescript": "^5.7.3"
   },
   "engines": {

@@ -48,6 +48,13 @@ export class GameOverScene extends Phaser.Scene {
 
     this.input.keyboard!.once('keydown-SPACE', () => this.restart());
     this.input.once('pointerdown', () => this.restart());
+    this.input.keyboard!.once('keydown-ESC', () => {
+      if (window.parent !== window) {
+        window.parent.postMessage('backToArcade', '*');
+      } else {
+        window.history.back();
+      }
+    });
   }
 
   private restart() {

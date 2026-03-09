@@ -104,6 +104,15 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleInput() {
+    if (this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC).isDown) {
+      if (window.parent !== window) {
+        window.parent.postMessage('backToArcade', '*');
+      } else {
+        window.history.back();
+      }
+      return;
+    }
+
     const up = this.cursors.up.isDown || this.wasd.up.isDown;
     const down = this.cursors.down.isDown || this.wasd.down.isDown;
     const left = this.cursors.left.isDown || this.wasd.left.isDown;
